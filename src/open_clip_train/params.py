@@ -301,6 +301,12 @@ def parse_args(args):
         help="Force use of CustomTextCLIP model (separate text-tower).",
     )
     parser.add_argument(
+        "--non_strict_weight_load",
+        default=False,
+        action='store_true',
+        help="Allow flexible (partial) model weight loading."
+    )
+    parser.add_argument(
         "--torchscript",
         default=False,
         action='store_true',
