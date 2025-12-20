@@ -416,6 +416,12 @@ def parse_args(args):
         help="Freeze LayerNorm running stats in text tower for any locked layers.",
     )
     parser.add_argument(
+        "--train-only-sem",
+        default=False,
+        action='store_true',
+        help="Freeze all params except SEM.",
+    )
+    parser.add_argument(
         "--log-every-n-steps",
         type=int,
         default=100,

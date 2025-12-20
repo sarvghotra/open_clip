@@ -239,7 +239,7 @@ def main(args):
         pretrained_image=args.pretrained_image,
         output_dict=True,
         cache_dir=args.cache_dir,
-        non_strict_weight_load=args.non_strict_weight_load,
+        strict_weight_load=(not args.non_strict_weight_load),
         **model_kwargs,
     )
     if args.distill:
@@ -279,6 +279,9 @@ def main(args):
             unlocked_layers=args.lock_text_unlocked_layers,
             freeze_layer_norm=args.lock_text_freeze_layer_norm)
 
+    if args.train_only_sem:
+        model.lock_except_sem_params()
+
     if args.grad_checkpointing:
         model.set_grad_checkpointing()
 
@@ -292,6 +295,13 @@ def main(args):
                 val = getattr(args, name)
                 logging.info(f"  {name}: {val}")
                 f.write(f"{name}: {val}\n")
+
+        # print the numbers of trainable parameter
+        total_num_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(
+            p.numel() for p in model.parameters() if p.requires_grad
+        )
+        logging.info(f"Total params/trainable params: {total_num_params}/{trainable_params}")
 
     if args.distributed and not args.horovod:
         if args.use_bn_sync:

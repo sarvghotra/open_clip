@@ -534,7 +534,6 @@ class CLIPSEM(CLIP):
         self.sem_norm = nn.LayerNorm(sem_out, eps=1e-6)
         self.sem_out = nn.Linear(sem_out, embed_dim, bias=False)
 
-    # TODO: use compile
     # @torch.compile
     def sem(self, x):
         o = x.view(len(x), -1)
@@ -565,6 +564,14 @@ class CLIPSEM(CLIP):
                 x = x @ self.text_projection
 
         return F.normalize(x, dim=-1) if normalize else x
+
+    def lock_except_sem_params(self):
+        sem_substring = "sem"
+        for name, param in self.named_parameters():
+            if sem_substring not in name:
+                param.requires_grad = False
+            else:
+                print(f"Not freezing parameter: {name}")
 
 
 class CustomTextCLIP(nn.Module):
@@ -822,7 +829,6 @@ class SEMVisionTransformer(VisionTransformer):
         self.sem_norm = nn.LayerNorm(sem_out, eps=1e-6)
         self.sem_out = nn.Linear(sem_out, width, bias=False)
 
-    # TODO: use compile
     # @torch.compile
     def sem(self, x):
         o = x.view(len(x), -1)

@@ -269,7 +269,7 @@ def create_model(
         output_dict: Optional[bool] = None,
         require_pretrained: bool = False,
         weights_only: bool = True,
-        non_strict_weight_load: bool = True,
+        strict_weight_load: bool = True,
         **model_kwargs,
 ) -> torch.nn.Module:
     """
@@ -513,7 +513,7 @@ def create_model(
         load_checkpoint(
             model,
             checkpoint_path,
-            strict=non_strict_weight_load,
+            strict=strict_weight_load,
             weights_only=weights_only,
             device='cpu' # Load to CPU first
         )
@@ -853,7 +853,7 @@ def create_model_and_transforms(
         cache_dir: Optional[str] = None,
         output_dict: Optional[bool] = None,
         weights_only: bool = True,
-        non_strict_weight_load: bool = True,
+        strict_weight_load: bool = True,
         **model_kwargs,
 ):
     """
@@ -951,7 +951,7 @@ def create_model_and_transforms(
         cache_dir=cache_dir,
         output_dict=output_dict,
         weights_only=weights_only,
-        non_strict_weight_load=non_strict_weight_load,
+        strict_weight_load=strict_weight_load,
         **model_kwargs,
     )
 
