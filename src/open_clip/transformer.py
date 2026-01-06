@@ -620,6 +620,7 @@ class VisionTransformer(nn.Module):
         self.grid_size = (image_height // patch_height, image_width // patch_width)
         self.final_ln_after_pool = final_ln_after_pool  # currently ignored w/ attn pool enabled
         self.output_dim = output_dim
+        self.width = width
 
         self.conv1 = nn.Conv2d(
             in_channels=3,
@@ -914,7 +915,7 @@ class VisionTransformer(nn.Module):
 
         if self.output_tokens:
             return pooled, tokens
-        
+
         return pooled
 
 

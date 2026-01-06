@@ -108,7 +108,7 @@ def main(args):
         args.log_path = os.path.join(log_base_path, log_filename)
         if os.path.exists(args.log_path) and not resume_latest:
             print(
-                "Error. Experiment already exists. Use --name {} to specify a new experiment."
+                f"Error. Experiment already exists. Use --name {args.log_path} to specify a new experiment. Rank: {args.rank} {args.local_rank}"
             )
             return -1
 
@@ -310,7 +310,7 @@ def main(args):
         if args.ddp_static_graph:
             # this doesn't exist in older PyTorch, arg only added if enabled
             ddp_args['static_graph'] = True
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], **ddp_args)
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], find_unused_parameters=True, **ddp_args)
 
         if args.distill:
             dist_model = torch.nn.parallel.DistributedDataParallel(dist_model, device_ids=[device], **ddp_args)
