@@ -839,6 +839,8 @@ class SEMVisionTransformer(VisionTransformer):
         o = o.view(-1, self.L * self.V)
         return self.sem_out(o)
 
+    # tranformer --> LayerNorm --> text_global_pool --> nn.Linear
+    # tranformer --> LayerNorm --> text_global_pool --> SEM --> nn.Linear
     def forward(self, x: torch.Tensor):
         x = self._embeds(x)
         x = self.transformer(x)
