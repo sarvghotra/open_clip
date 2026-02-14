@@ -491,6 +491,13 @@ def parse_args(args):
         type=str,
         help='A string to specify a specific distributed loss implementation.'
     )
+    parser.add_argument(
+        "--prev-run-steps",
+        default=0,
+        type=int,
+        help='Number of global steps in the pretrain run for continue finetune.'
+    )
+
 
     args = parser.parse_args(args)
 
