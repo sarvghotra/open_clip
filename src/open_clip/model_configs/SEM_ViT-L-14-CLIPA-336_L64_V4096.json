@@ -25,6 +25,7 @@
         "heads": 12,
         "layers": 12,
         "pool_type": "last",
-        "no_causal_mask": true
+        "no_causal_mask": true,
+        "proj_type": "none"
     }
 }

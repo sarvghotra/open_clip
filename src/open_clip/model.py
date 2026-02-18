@@ -525,15 +525,20 @@ class CLIPSEM(CLIP):
         del self.visual
         self.visual = _build_vision_tower(embed_dim, vision_cfg, quick_gelu, cast_dtype, sem_cfg)
 
+        # for the text tower
         self.L = sem_cfg['L']
         self.V = sem_cfg['V']
         self.temp = sem_cfg['temp']
-        sem_in = embed_dim
+        sem_in = text_cfg.width
         sem_out = self.L * self.V
         self.sem_embed = nn.Linear(sem_in, sem_out, bias=False)
         self.sem_norm = nn.LayerNorm(sem_out, eps=1e-6)
-        self.sem_out = nn.Linear(sem_out, embed_dim, bias=False)
 
+        # self.sem_out = nn.Linear(sem_out, text_cfg.width, bias=False)
+        output_dim = embed_dim
+        self.sem_out = nn.Linear(sem_out, output_dim, bias=False)
+
+    # sem for the text side
     # @torch.compile
     def sem(self, x):
         o = x.view(len(x), -1)
@@ -542,6 +547,7 @@ class CLIPSEM(CLIP):
         o = o.view(-1, self.L, self.V)
         o = torch.softmax(o / self.temp, dim=-1)
         o = o.view(-1, self.L * self.V)
+        o = self.sem_norm(o)    # Note: SEM's original implementation doesn't have this norm.
         return self.sem_out(o)
 
     def encode_text(self, text, normalize: bool = False):
@@ -818,6 +824,7 @@ class SEMVisionTransformer(VisionTransformer):
             scale_attn_inner,
             scale_attn,
             scale_fc,
+            is_sem=True
             )
 
         self.L = L
@@ -827,16 +834,18 @@ class SEMVisionTransformer(VisionTransformer):
         sem_out = self.L * self.V
         self.sem_embed = nn.Linear(sem_in, sem_out, bias=False)
         self.sem_norm = nn.LayerNorm(sem_out, eps=1e-6)
-        self.sem_out = nn.Linear(sem_out, width, bias=False)
+
+        self.sem_out = nn.Linear(sem_out, output_dim, bias=False)   # Note: It's replacing the CLIP's final linear layer --> changed proj_type: linear -> none in text_cfg
 
     # @torch.compile
-    def sem(self, x):
-        o = x.view(len(x), -1)
+    def sem(self, x):  # [B, Width]
+        o = x.view(len(x), -1)  # [B, Width]
         o = self.sem_embed(o)
         o = self.sem_norm(o)
         o = o.view(-1, self.L, self.V)
         o = torch.softmax(o / self.temp, dim=-1)
         o = o.view(-1, self.L * self.V)
+        o = self.sem_norm(o)    # Note: SEM's original implementation doesn't have this norm.
         return self.sem_out(o)
 
     # tranformer --> LayerNorm --> text_global_pool --> nn.Linear
