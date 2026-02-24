@@ -529,7 +529,7 @@ class CLIPSEM(CLIP):
         self.L = sem_cfg['L']
         self.V = sem_cfg['V']
         self.temp = sem_cfg['temp']
-        sem_in = text_cfg.width
+        sem_in = text_cfg['width']
         sem_out = self.L * self.V
         self.sem_embed = nn.Linear(sem_in, sem_out, bias=False)
         self.sem_norm = nn.LayerNorm(sem_out, eps=1e-6)
