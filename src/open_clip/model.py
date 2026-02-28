@@ -142,7 +142,8 @@ def _build_vision_tower(
         vision_cfg: CLIPVisionCfg,
         quick_gelu: bool = False,
         cast_dtype: Optional[torch.dtype] = None,
-        sem_cfg: SEMCfg = None
+        sem_cfg: SEMCfg = None,
+        suffix_nonlinear_mlp: bool = False
 ):
     if isinstance(vision_cfg, dict):
         vision_cfg = CLIPVisionCfg(**vision_cfg)
@@ -214,7 +215,11 @@ def _build_vision_tower(
             for k, v in sem_cfg.items():
                 args_dict[k] = v
 
-            visual = SEMVisionTransformer(**args_dict)
+            if suffix_nonlinear_mlp:
+                visual = SuffixMLPVisionTransformer(**args_dict)
+            else:
+                visual = SEMVisionTransformer(**args_dict)
+
         else:
             visual = VisionTransformer(**args_dict)
 
@@ -1094,3 +1099,199 @@ def get_model_tokenize_cfg(model):
     if vocab_size is not None:
         cfg['vocab_size'] = vocab_size
     return cfg
+
+
+class CLIPSuffixMLP(CLIP):
+    output_dict: torch.jit.Final[bool]
+
+    def __init__(
+        self,
+        embed_dim: int,
+        vision_cfg: CLIPVisionCfg,
+        text_cfg: CLIPTextCfg,
+        sem_cfg: SEMCfg,
+        quick_gelu: bool = False,
+        init_logit_scale: float = np.log(1 / 0.07),
+        init_logit_bias: Optional[float] = None,
+        nonscalar_logit_scale: bool = False,
+        cast_dtype: Optional[torch.dtype] = None,
+        output_dict: bool = False,
+        suffix_nonlinear_mlp: bool = False
+    ):
+        super().__init__(
+            embed_dim,
+            vision_cfg,
+            text_cfg,
+            quick_gelu,
+            init_logit_scale,
+            init_logit_bias,
+            nonscalar_logit_scale,
+            cast_dtype,
+            output_dict
+        )
+
+        del self.visual
+        self.visual = _build_vision_tower(embed_dim, vision_cfg, quick_gelu, cast_dtype, sem_cfg, suffix_nonlinear_mlp=True)
+
+        # for the text tower
+        self.L = sem_cfg['L']
+        self.V = sem_cfg['V']
+        self.temp = sem_cfg['temp']
+        suff_mlp_in = text_cfg['width']
+        suff_mlp_out = self.L * self.V
+        self.suff_mlp_embed = nn.Linear(suff_mlp_in, suff_mlp_out, bias=False)
+        self.suff_mlp_norm = nn.LayerNorm(suff_mlp_out, eps=1e-6)
+        self.suff_mlp_act = nn.GELU()
+
+        # self.sem_out = nn.Linear(sem_out, text_cfg.width, bias=False)
+        output_dim = embed_dim
+        self.suff_mlp_out = nn.Linear(suff_mlp_out, output_dim, bias=False)
+
+    # sem for the text side
+    # @torch.compile
+    def suff_mlp(self, x):
+        o = x.view(len(x), -1)
+        o = self.suff_mlp_embed(o)
+        o = self.suff_mlp_norm(o)
+        # o = o.view(-1, self.L, self.V)
+        # o = torch.softmax(o / self.temp, dim=-1)
+        o = self.suff_mlp_act(o)
+        # o = o.view(-1, self.L * self.V)
+        o = self.suff_mlp_norm(o)    # Note: SEM's original implementation doesn't have this norm.
+        return self.suff_mlp_out(o)
+
+    def encode_text(self, text, normalize: bool = False):
+        cast_dtype = self.transformer.get_cast_dtype()
+
+        x = self.token_embedding(text).to(cast_dtype)  # [batch_size, n_ctx, d_model]
+
+        x = x + self.positional_embedding.to(cast_dtype)
+        x = self.transformer(x, attn_mask=self.attn_mask)
+        x = self.ln_final(x)  # [batch_size, n_ctx, transformer.width]
+        x = text_global_pool(x, text, self.text_pool_type, eos_token_id=getattr(self, "text_eos_id", None))
+
+        # SEM projection
+        x = self.suff_mlp(x)
+
+        if self.text_projection is not None:
+            if isinstance(self.text_projection, nn.Linear):
+                x = self.text_projection(x)
+            else:
+                x = x @ self.text_projection
+
+        return F.normalize(x, dim=-1) if normalize else x
+
+    def lock_except_sem_params(self):
+        sem_substring = "sem"
+        for name, param in self.named_parameters():
+            if sem_substring not in name:
+                param.requires_grad = False
+            else:
+                print(f"Not freezing parameter: {name}")
+
+
+class SuffixMLPVisionTransformer(VisionTransformer):
+    output_tokens: torch.jit.Final[bool]
+
+    def __init__(self, image_size: int,
+        patch_size: int,
+        width: int,
+        layers: int,
+        heads: int,
+        mlp_ratio: float,
+        ls_init_value: float = None,
+        attentional_pool: bool = False,
+        attn_pooler_queries: int = 256,
+        attn_pooler_heads: int = 8,
+        output_dim: int = 512,
+        patch_dropout: float = 0,
+        no_ln_pre: bool = False,
+        pos_embed_type: str = 'learnable',
+        pool_type: str = 'tok',
+        final_ln_after_pool: bool = False,
+        act_layer: Callable = nn.GELU,
+        norm_layer: Callable = ...,
+        output_tokens: bool = False,
+        block_type: Optional[str] = None,
+        qk_norm: bool = False,
+        scaled_cosine_attn: bool = False,
+        scale_heads: bool = False,
+        scale_attn_inner: bool = False,
+        scale_attn: bool = False,
+        scale_fc: bool = False,
+        L: int = 4096,
+        V: int = 32,
+        temp: int = 1.0
+    ):
+
+        super().__init__(
+            image_size,
+            patch_size,
+            width,
+            layers,
+            heads,
+            mlp_ratio,
+            ls_init_value,
+            attentional_pool,
+            attn_pooler_queries,
+            attn_pooler_heads,
+            output_dim,
+            patch_dropout,
+            no_ln_pre,
+            pos_embed_type,
+            pool_type,
+            final_ln_after_pool,
+            act_layer,
+            norm_layer,
+            output_tokens,
+            block_type,
+            qk_norm,
+            scaled_cosine_attn,
+            scale_heads,
+            scale_attn_inner,
+            scale_attn,
+            scale_fc,
+            is_sem=True
+            )
+
+        self.L = L
+        self.V = V
+        self.temp = temp
+
+        suff_mlp_in = width
+        suff_mlp_out = self.L * self.V
+        self.suff_mlp_embed = nn.Linear(suff_mlp_in, suff_mlp_out, bias=False)
+        self.suff_mlp_norm = nn.LayerNorm(suff_mlp_out, eps=1e-6)
+        self.suff_mlp_act = nn.GELU()
+
+        self.suff_mlp_out = nn.Linear(suff_mlp_out, output_dim, bias=False)
+
+    # @torch.compile
+    def suff_mlp(self, x):
+        o = x.view(len(x), -1)
+        o = self.suff_mlp_embed(o)
+        o = self.suff_mlp_norm(o)
+        # o = o.view(-1, self.L, self.V)
+        # o = torch.softmax(o / self.temp, dim=-1)
+        o = self.suff_mlp_act(o)
+        # o = o.view(-1, self.L * self.V)
+        o = self.suff_mlp_norm(o)    # Note: SEM's original implementation doesn't have this norm.
+        return self.suff_mlp_out(o)
+
+    # tranformer --> LayerNorm --> text_global_pool --> nn.Linear
+    # tranformer --> LayerNorm --> text_global_pool --> SEM --> nn.Linear
+    def forward(self, x: torch.Tensor):
+        x = self._embeds(x)
+        x = self.transformer(x)
+        pooled, tokens = self._pool(x)
+
+        pooled = self.suff_mlp(pooled)
+
+        if self.proj is not None:
+            pooled = pooled @ self.proj
+
+        if self.output_tokens:
+            return pooled, tokens
+
+        return pooled
+

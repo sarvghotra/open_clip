@@ -12,7 +12,7 @@ import torch
 
 from .convert import convert_state_dict
 from .model import CLIP, CustomTextCLIP, convert_weights_to_lp, convert_to_custom_text_state_dict,\
-    resize_pos_embed, get_cast_dtype, resize_text_pos_embed, set_model_preprocess_cfg, CLIPSEM
+    resize_pos_embed, get_cast_dtype, resize_text_pos_embed, set_model_preprocess_cfg, CLIPSEM, CLIPSuffixMLP
 from .coca_model import CoCa
 from .loss import ClipLoss, DistillClipLoss, CoCaLoss, SigLipLoss
 from .pretrained import is_pretrained_cfg, get_pretrained_cfg, download_pretrained,\
@@ -486,6 +486,8 @@ def create_model(
             model_class = CoCa
         else:
             model_class = CustomTextCLIP
+    elif "suffix_nonlinear_mlp" in model_cfg and model_cfg['suffix_nonlinear_mlp']:
+        model_class = CLIPSuffixMLP
     elif "sem_cfg" in model_cfg:
         model_class = CLIPSEM
     else:
