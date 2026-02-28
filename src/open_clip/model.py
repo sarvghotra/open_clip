@@ -1157,7 +1157,7 @@ class CLIPSuffixMLP(CLIP):
         # o = torch.softmax(o / self.temp, dim=-1)
         o = self.suff_mlp_act(o)
         # o = o.view(-1, self.L * self.V)
-        # o = self.suff_mlp_norm(o)    # Note: SEM's original implementation doesn't have this norm.
+        o = self.suff_mlp_norm(o)    # Note: SEM's original implementation doesn't have this norm.
         return self.suff_mlp_out(o)
 
     def encode_text(self, text, normalize: bool = False):
@@ -1275,7 +1275,7 @@ class SuffixMLPVisionTransformer(VisionTransformer):
         # o = torch.softmax(o / self.temp, dim=-1)
         o = self.suff_mlp_act(o)
         # o = o.view(-1, self.L * self.V)
-        # o = self.suff_mlp_norm(o)    # Note: SEM's original implementation doesn't have this norm.
+        o = self.suff_mlp_norm(o)    # Note: SEM's original implementation doesn't have this norm.
         return self.suff_mlp_out(o)
 
     # tranformer --> LayerNorm --> text_global_pool --> nn.Linear
