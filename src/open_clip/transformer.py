@@ -611,6 +611,7 @@ class VisionTransformer(nn.Module):
             scale_attn_inner: bool = False,
             scale_attn: bool = False,
             scale_fc: bool = False,
+            is_sem: bool = False,
     ):
         super().__init__()
         assert pool_type in ('tok', 'avg', 'none')
@@ -620,6 +621,7 @@ class VisionTransformer(nn.Module):
         self.grid_size = (image_height // patch_height, image_width // patch_width)
         self.final_ln_after_pool = final_ln_after_pool  # currently ignored w/ attn pool enabled
         self.output_dim = output_dim
+        self.width = width
 
         self.conv1 = nn.Conv2d(
             in_channels=3,
@@ -703,7 +705,11 @@ class VisionTransformer(nn.Module):
             self.pool_type = pool_type
 
         self.ln_post = norm_layer(pool_dim)
-        self.proj = nn.Parameter(scale * torch.randn(pool_dim, output_dim))
+
+        if not is_sem:
+            self.proj = nn.Parameter(scale * torch.randn(pool_dim, output_dim))
+        else:
+            self.proj = None
 
         self.init_parameters()
 
@@ -914,7 +920,7 @@ class VisionTransformer(nn.Module):
 
         if self.output_tokens:
             return pooled, tokens
-        
+
         return pooled
 
 

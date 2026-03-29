@@ -6,7 +6,7 @@ import copy
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 
 import numpy as np
 import torch
@@ -112,6 +112,13 @@ class CLIPTextCfg:
     hf_pooler_type: str = 'mean_pooler'  # attentional pooling for HF models
 
 
+@dataclass
+class SEMCfg:
+    L: int = 4096,
+    V: int = 32,
+    temp: float = 1.0
+
+
 def get_cast_dtype(precision: str):
     cast_dtype = None
     if precision == 'bf16':
@@ -134,7 +141,8 @@ def _build_vision_tower(
         embed_dim: int,
         vision_cfg: CLIPVisionCfg,
         quick_gelu: bool = False,
-        cast_dtype: Optional[torch.dtype] = None
+        cast_dtype: Optional[torch.dtype] = None,
+        sem_cfg: SEMCfg = None
 ):
     if isinstance(vision_cfg, dict):
         vision_cfg = CLIPVisionCfg(**vision_cfg)
@@ -174,34 +182,41 @@ def _build_vision_tower(
         if vision_cfg.act_kwargs is not None:
             act_layer = partial(act_layer, **vision_cfg.act_kwargs)
 
-        visual = VisionTransformer(
-            image_size=vision_cfg.image_size,
-            patch_size=vision_cfg.patch_size,
-            width=vision_cfg.width,
-            layers=vision_cfg.layers,
-            heads=vision_heads,
-            mlp_ratio=vision_cfg.mlp_ratio,
-            ls_init_value=vision_cfg.ls_init_value,
-            patch_dropout=vision_cfg.patch_dropout,
-            attentional_pool=vision_cfg.attentional_pool,
-            attn_pooler_queries=vision_cfg.attn_pooler_queries,
-            attn_pooler_heads=vision_cfg.attn_pooler_heads,
-            pos_embed_type=vision_cfg.pos_embed_type,
-            no_ln_pre=vision_cfg.no_ln_pre,
-            final_ln_after_pool=vision_cfg.final_ln_after_pool,
-            pool_type=vision_cfg.pool_type,
-            output_tokens=vision_cfg.output_tokens,
-            output_dim=embed_dim,
-            act_layer=act_layer,
-            norm_layer=norm_layer,
-            block_type=vision_cfg.block_type,
-            qk_norm=vision_cfg.qk_norm,
-            scaled_cosine_attn=vision_cfg.scaled_cosine_attn,
-            scale_heads=vision_cfg.scale_heads,
-            scale_attn_inner=vision_cfg.scale_attn_inner,
-            scale_attn=vision_cfg.scale_attn,
-            scale_fc=vision_cfg.scale_fc,
-        )
+        args_dict = {
+            "image_size": vision_cfg.image_size,
+            "patch_size": vision_cfg.patch_size,
+            "width": vision_cfg.width,
+            "layers": vision_cfg.layers,
+            "heads": vision_heads,
+            "mlp_ratio": vision_cfg.mlp_ratio,
+            "ls_init_value": vision_cfg.ls_init_value,
+            "patch_dropout": vision_cfg.patch_dropout,
+            "attentional_pool": vision_cfg.attentional_pool,
+            "attn_pooler_queries": vision_cfg.attn_pooler_queries,
+            "attn_pooler_heads": vision_cfg.attn_pooler_heads,
+            "pos_embed_type": vision_cfg.pos_embed_type,
+            "no_ln_pre": vision_cfg.no_ln_pre,
+            "final_ln_after_pool": vision_cfg.final_ln_after_pool,
+            "pool_type": vision_cfg.pool_type,
+            "output_tokens": vision_cfg.output_tokens,
+            "output_dim": embed_dim,
+            "act_layer": act_layer,
+            "norm_layer": norm_layer,
+            "block_type": vision_cfg.block_type,
+            "qk_norm": vision_cfg.qk_norm,
+            "scaled_cosine_attn": vision_cfg.scaled_cosine_attn,
+            "scale_heads": vision_cfg.scale_heads,
+            "scale_attn_inner": vision_cfg.scale_attn_inner,
+            "scale_attn": vision_cfg.scale_attn,
+            "scale_fc": vision_cfg.scale_fc,
+        }
+        if sem_cfg is not None:
+            for k, v in sem_cfg.items():
+                args_dict[k] = v
+
+            visual = SEMVisionTransformer(**args_dict)
+        else:
+            visual = VisionTransformer(**args_dict)
 
     return visual
 
@@ -479,6 +494,92 @@ class CLIP(nn.Module):
         return image_features, text_features, self.logit_scale.exp()
 
 
+class CLIPSEM(CLIP):
+    output_dict: torch.jit.Final[bool]
+
+    def __init__(
+        self,
+        embed_dim: int,
+        vision_cfg: CLIPVisionCfg,
+        text_cfg: CLIPTextCfg,
+        sem_cfg: SEMCfg,
+        quick_gelu: bool = False,
+        init_logit_scale: float = np.log(1 / 0.07),
+        init_logit_bias: Optional[float] = None,
+        nonscalar_logit_scale: bool = False,
+        cast_dtype: Optional[torch.dtype] = None,
+        output_dict: bool = False,
+    ):
+        super().__init__(
+            embed_dim,
+            vision_cfg,
+            text_cfg,
+            quick_gelu,
+            init_logit_scale,
+            init_logit_bias,
+            nonscalar_logit_scale,
+            cast_dtype,
+            output_dict
+        )
+
+        del self.visual
+        self.visual = _build_vision_tower(embed_dim, vision_cfg, quick_gelu, cast_dtype, sem_cfg)
+
+        # for the text tower
+        self.L = sem_cfg['L']
+        self.V = sem_cfg['V']
+        self.temp = sem_cfg['temp']
+        sem_in = text_cfg['width']
+        sem_out = self.L * self.V
+        self.sem_embed = nn.Linear(sem_in, sem_out, bias=False)
+        self.sem_norm = nn.LayerNorm(sem_out, eps=1e-6)
+
+        # self.sem_out = nn.Linear(sem_out, text_cfg.width, bias=False)
+        output_dim = embed_dim
+        self.sem_out = nn.Linear(sem_out, output_dim, bias=False)
+
+    # sem for the text side
+    # @torch.compile
+    def sem(self, x):
+        o = x.view(len(x), -1)
+        o = self.sem_embed(o)
+        o = self.sem_norm(o)
+        o = o.view(-1, self.L, self.V)
+        o = torch.softmax(o / self.temp, dim=-1)
+        o = o.view(-1, self.L * self.V)
+        o = self.sem_norm(o)    # Note: SEM's original implementation doesn't have this norm.
+        return self.sem_out(o)
+
+    def encode_text(self, text, normalize: bool = False):
+        cast_dtype = self.transformer.get_cast_dtype()
+
+        x = self.token_embedding(text).to(cast_dtype)  # [batch_size, n_ctx, d_model]
+
+        x = x + self.positional_embedding.to(cast_dtype)
+        x = self.transformer(x, attn_mask=self.attn_mask)
+        x = self.ln_final(x)  # [batch_size, n_ctx, transformer.width]
+        x = text_global_pool(x, text, self.text_pool_type, eos_token_id=getattr(self, "text_eos_id", None))
+
+        # SEM projection
+        x = self.sem(x)
+
+        if self.text_projection is not None:
+            if isinstance(self.text_projection, nn.Linear):
+                x = self.text_projection(x)
+            else:
+                x = x @ self.text_projection
+
+        return F.normalize(x, dim=-1) if normalize else x
+
+    def lock_except_sem_params(self):
+        sem_substring = "sem"
+        for name, param in self.named_parameters():
+            if sem_substring not in name:
+                param.requires_grad = False
+            else:
+                print(f"Not freezing parameter: {name}")
+
+
 class CustomTextCLIP(nn.Module):
     output_dict: torch.jit.Final[bool]
 
@@ -660,6 +761,109 @@ class CustomTextCLIP(nn.Module):
         if self.logit_bias is not None:
             return image_features, text_features, self.logit_scale.exp(), self.logit_bias
         return image_features, text_features, self.logit_scale.exp()
+
+
+class SEMVisionTransformer(VisionTransformer):
+    output_tokens: torch.jit.Final[bool]
+
+    def __init__(self, image_size: int,
+        patch_size: int,
+        width: int,
+        layers: int,
+        heads: int,
+        mlp_ratio: float,
+        ls_init_value: float = None,
+        attentional_pool: bool = False,
+        attn_pooler_queries: int = 256,
+        attn_pooler_heads: int = 8,
+        output_dim: int = 512,
+        patch_dropout: float = 0,
+        no_ln_pre: bool = False,
+        pos_embed_type: str = 'learnable',
+        pool_type: str = 'tok',
+        final_ln_after_pool: bool = False,
+        act_layer: Callable = nn.GELU,
+        norm_layer: Callable = ...,
+        output_tokens: bool = False,
+        block_type: Optional[str] = None,
+        qk_norm: bool = False,
+        scaled_cosine_attn: bool = False,
+        scale_heads: bool = False,
+        scale_attn_inner: bool = False,
+        scale_attn: bool = False,
+        scale_fc: bool = False,
+        L: int = 4096,
+        V: int = 32,
+        temp: int = 1.0
+    ):
+
+        super().__init__(
+            image_size,
+            patch_size,
+            width,
+            layers,
+            heads,
+            mlp_ratio,
+            ls_init_value,
+            attentional_pool,
+            attn_pooler_queries,
+            attn_pooler_heads,
+            output_dim,
+            patch_dropout,
+            no_ln_pre,
+            pos_embed_type,
+            pool_type,
+            final_ln_after_pool,
+            act_layer,
+            norm_layer,
+            output_tokens,
+            block_type,
+            qk_norm,
+            scaled_cosine_attn,
+            scale_heads,
+            scale_attn_inner,
+            scale_attn,
+            scale_fc,
+            is_sem=True
+            )
+
+        self.L = L
+        self.V = V
+        self.temp = temp
+        sem_in = width
+        sem_out = self.L * self.V
+        self.sem_embed = nn.Linear(sem_in, sem_out, bias=False)
+        self.sem_norm = nn.LayerNorm(sem_out, eps=1e-6)
+
+        self.sem_out = nn.Linear(sem_out, output_dim, bias=False)   # Note: It's replacing the CLIP's final linear layer --> changed proj_type: linear -> none in text_cfg
+
+    # @torch.compile
+    def sem(self, x):  # [B, Width]
+        o = x.view(len(x), -1)  # [B, Width]
+        o = self.sem_embed(o)
+        o = self.sem_norm(o)
+        o = o.view(-1, self.L, self.V)
+        o = torch.softmax(o / self.temp, dim=-1)
+        o = o.view(-1, self.L * self.V)
+        o = self.sem_norm(o)    # Note: SEM's original implementation doesn't have this norm.
+        return self.sem_out(o)
+
+    # tranformer --> LayerNorm --> text_global_pool --> nn.Linear
+    # tranformer --> LayerNorm --> text_global_pool --> SEM --> nn.Linear
+    def forward(self, x: torch.Tensor):
+        x = self._embeds(x)
+        x = self.transformer(x)
+        pooled, tokens = self._pool(x)
+
+        pooled = self.sem(pooled)
+
+        if self.proj is not None:
+            pooled = pooled @ self.proj
+
+        if self.output_tokens:
+            return pooled, tokens
+
+        return pooled
 
 
 def convert_weights_to_lp(model: nn.Module, dtype=torch.float16):

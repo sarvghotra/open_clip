@@ -12,7 +12,7 @@ import torch
 
 from .convert import convert_state_dict
 from .model import CLIP, CustomTextCLIP, convert_weights_to_lp, convert_to_custom_text_state_dict,\
-    resize_pos_embed, get_cast_dtype, resize_text_pos_embed, set_model_preprocess_cfg
+    resize_pos_embed, get_cast_dtype, resize_text_pos_embed, set_model_preprocess_cfg, CLIPSEM
 from .coca_model import CoCa
 from .loss import ClipLoss, DistillClipLoss, CoCaLoss, SigLipLoss
 from .pretrained import is_pretrained_cfg, get_pretrained_cfg, download_pretrained,\
@@ -269,6 +269,7 @@ def create_model(
         output_dict: Optional[bool] = None,
         require_pretrained: bool = False,
         weights_only: bool = True,
+        strict_weight_load: bool = True,
         **model_kwargs,
 ) -> torch.nn.Module:
     """
@@ -485,6 +486,8 @@ def create_model(
             model_class = CoCa
         else:
             model_class = CustomTextCLIP
+    elif "sem_cfg" in model_cfg:
+        model_class = CLIPSEM
     else:
         # Default to standard CLIP
         model_class = CLIP
@@ -510,7 +513,7 @@ def create_model(
         load_checkpoint(
             model,
             checkpoint_path,
-            strict=True,
+            strict=strict_weight_load,
             weights_only=weights_only,
             device='cpu' # Load to CPU first
         )
@@ -850,6 +853,7 @@ def create_model_and_transforms(
         cache_dir: Optional[str] = None,
         output_dict: Optional[bool] = None,
         weights_only: bool = True,
+        strict_weight_load: bool = True,
         **model_kwargs,
 ):
     """
@@ -947,6 +951,7 @@ def create_model_and_transforms(
         cache_dir=cache_dir,
         output_dict=output_dict,
         weights_only=weights_only,
+        strict_weight_load=strict_weight_load,
         **model_kwargs,
     )
 

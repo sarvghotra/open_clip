@@ -84,10 +84,11 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
     end = time.time()
     for i, batch in enumerate(dataloader):
         i_accum = i // args.accum_freq
-        step = num_batches_per_epoch * epoch + i_accum
+        step = num_batches_per_epoch * epoch + i_accum + args.prev_run_steps
+        steps_this_run = num_batches_per_epoch * epoch + i_accum
 
         if not args.skip_scheduler:
-            scheduler(step)
+            scheduler(steps_this_run)
 
         images, texts = batch
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
@@ -206,7 +207,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             logit_scale_scalar = logit_scale.item()
             loss_log = " ".join(
                 [
-                    f"{loss_name.capitalize()}: {loss_m.val:#.5g} ({loss_m.avg:#.5g})" 
+                    f"{loss_name.capitalize()}: {loss_m.val:#.5g} ({loss_m.avg:#.5g})"
                     for loss_name, loss_m in losses_m.items()
                 ]
             )
@@ -227,8 +228,9 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                 "samples_per_second": samples_per_second,
                 "samples_per_second_per_gpu": samples_per_second_per_gpu,
                 "scale": logit_scale_scalar,
-                "lr": optimizer.param_groups[0]["lr"]
-            }            
+                "lr": optimizer.param_groups[0]["lr"],
+                "epoch": epoch
+            }
             log_data.update({name:val.val for name,val in losses_m.items()})
 
             log_data = {"train/" + name: val for name, val in log_data.items()}
@@ -236,12 +238,12 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             if tb_writer is not None:
                 for name, val in log_data.items():
                     tb_writer.add_scalar(name, val, step)
-            
+
             if args.wandb:
                 assert wandb is not None, 'Please install wandb.'
                 log_data['step'] = step  # for backwards compatibility
                 wandb.log(log_data, step=step)
-            
+
             # resetting batch / data time meters per log window
             batch_time_m.reset()
             data_time_m.reset()

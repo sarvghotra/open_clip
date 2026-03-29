@@ -108,7 +108,7 @@ def main(args):
         args.log_path = os.path.join(log_base_path, log_filename)
         if os.path.exists(args.log_path) and not resume_latest:
             print(
-                "Error. Experiment already exists. Use --name {} to specify a new experiment."
+                f"Error. Experiment already exists. Use --name {args.log_path} to specify a new experiment. Rank: {args.rank} {args.local_rank}"
             )
             return -1
 
@@ -170,8 +170,8 @@ def main(args):
     if is_master(args) and args.remote_sync is not None:
         # first make sure it works
         result = remote_sync(
-            os.path.join(args.logs, args.name), 
-            os.path.join(args.remote_sync, args.name), 
+            os.path.join(args.logs, args.name),
+            os.path.join(args.remote_sync, args.name),
             args.remote_sync_protocol
         )
         if result:
@@ -182,8 +182,8 @@ def main(args):
         # if all looks good, start a process to do this every args.remote_sync_frequency seconds
         remote_sync_process = start_sync_process(
             args.remote_sync_frequency,
-            os.path.join(args.logs, args.name), 
-            os.path.join(args.remote_sync, args.name), 
+            os.path.join(args.logs, args.name),
+            os.path.join(args.remote_sync, args.name),
             args.remote_sync_protocol
         )
         remote_sync_process.start()
@@ -239,12 +239,13 @@ def main(args):
         pretrained_image=args.pretrained_image,
         output_dict=True,
         cache_dir=args.cache_dir,
+        strict_weight_load=(not args.non_strict_weight_load),
         **model_kwargs,
     )
     if args.distill:
         # FIXME: currently assumes the model you're distilling from has the same tokenizer & transforms.
         dist_model, _, _ = create_model_and_transforms(
-            args.distill_model, 
+            args.distill_model,
             args.distill_pretrained,
             device=device,
             precision=args.precision,
@@ -278,6 +279,9 @@ def main(args):
             unlocked_layers=args.lock_text_unlocked_layers,
             freeze_layer_norm=args.lock_text_freeze_layer_norm)
 
+    if args.train_only_sem:
+        model.lock_except_sem_params()
+
     if args.grad_checkpointing:
         model.set_grad_checkpointing()
 
@@ -292,6 +296,13 @@ def main(args):
                 logging.info(f"  {name}: {val}")
                 f.write(f"{name}: {val}\n")
 
+        # print the numbers of trainable parameter
+        total_num_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(
+            p.numel() for p in model.parameters() if p.requires_grad
+        )
+        logging.info(f"Total params/trainable params: {total_num_params}/{trainable_params}")
+
     if args.distributed and not args.horovod:
         if args.use_bn_sync:
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -299,8 +310,8 @@ def main(args):
         if args.ddp_static_graph:
             # this doesn't exist in older PyTorch, arg only added if enabled
             ddp_args['static_graph'] = True
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], **ddp_args)
-    
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], **ddp_args) # find_unused_parameters=True,
+
         if args.distill:
             dist_model = torch.nn.parallel.DistributedDataParallel(dist_model, device_ids=[device], **ddp_args)
 
@@ -524,15 +535,15 @@ def main(args):
         logging.info('Final remote sync.')
         remote_sync_process.terminate()
         result = remote_sync(
-            os.path.join(args.logs, args.name), 
-            os.path.join(args.remote_sync, args.name), 
+            os.path.join(args.logs, args.name),
+            os.path.join(args.remote_sync, args.name),
             args.remote_sync_protocol
         )
         if result:
             logging.info('Final remote sync successful.')
         else:
             logging.info('Final remote sync failed.')
-    
+
 
 def copy_codebase(args):
     from shutil import copytree, ignore_patterns

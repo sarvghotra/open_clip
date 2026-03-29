@@ -301,6 +301,12 @@ def parse_args(args):
         help="Force use of CustomTextCLIP model (separate text-tower).",
     )
     parser.add_argument(
+        "--non_strict_weight_load",
+        default=False,
+        action='store_true',
+        help="Allow flexible (partial) model weight loading."
+    )
+    parser.add_argument(
         "--torchscript",
         default=False,
         action='store_true',
@@ -410,6 +416,12 @@ def parse_args(args):
         help="Freeze LayerNorm running stats in text tower for any locked layers.",
     )
     parser.add_argument(
+        "--train-only-sem",
+        default=False,
+        action='store_true',
+        help="Freeze all params except SEM.",
+    )
+    parser.add_argument(
         "--log-every-n-steps",
         type=int,
         default=100,
@@ -479,6 +491,13 @@ def parse_args(args):
         type=str,
         help='A string to specify a specific distributed loss implementation.'
     )
+    parser.add_argument(
+        "--prev-run-steps",
+        default=0,
+        type=int,
+        help='Number of global steps in the pretrain run for continue finetune.'
+    )
+
 
     args = parser.parse_args(args)
 
